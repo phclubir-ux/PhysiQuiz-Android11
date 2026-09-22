@@ -1,6 +1,7 @@
 package com.physiquiz.student;
 
 import android.app.Activity;
+import android.animation.ValueAnimator;
 import android.app.AlertDialog;
 import android.content.Intent;
 import android.content.SharedPreferences;
@@ -22,8 +23,10 @@ import android.text.Html;
 import android.text.InputType;
 import android.view.Gravity;
 import android.view.View;
+import android.view.ViewTreeObserver;
 import android.view.ViewGroup;
 import android.view.WindowManager;
+import android.view.animation.DecelerateInterpolator;
 import android.widget.Button;
 import android.widget.CheckBox;
 import android.widget.EditText;
@@ -75,6 +78,7 @@ public class MainActivity extends Activity {
     private final java.util.Map<String, LinearLayout> navItems = new java.util.HashMap<>();
     private final java.util.Map<String, ImageView> navIcons = new java.util.HashMap<>();
     private final java.util.Map<String, TextView> navLabels = new java.util.HashMap<>();
+    private final java.util.Map<String, View> navIconBadges = new java.util.HashMap<>();
 
     // Dark mode: `background`/`accent` above stay exactly what WordPress configured (light-theme
     // brand colors); these are the derived, theme-aware tokens every screen should read instead of
@@ -310,12 +314,18 @@ public class MainActivity extends Activity {
     private void addNav(int iconRes, String label, Runnable action) {
         LinearLayout col = column();
         col.setGravity(Gravity.CENTER);
+        // A small pill-shaped background behind the icon (colored only when this tab is active)
+        // reads as far more "alive" than just tinting the glyph, and matches the selected-tab
+        // treatment most modern apps use.
+        FrameLayout badge = new FrameLayout(this);
+        badge.setBackground(roundRect(Color.TRANSPARENT, 14, Color.TRANSPARENT, 0));
         ImageView iconView = new ImageView(this);
         iconView.setImageResource(iconRes);
         iconView.setColorFilter(cTextSecondary, PorterDuff.Mode.SRC_IN);
         int iconSize = dp(22);
-        LinearLayout.LayoutParams iconLp = new LinearLayout.LayoutParams(iconSize, iconSize);
-        col.addView(iconView, iconLp);
+        FrameLayout.LayoutParams iconLp = new FrameLayout.LayoutParams(iconSize, iconSize, Gravity.CENTER);
+        badge.addView(iconView, iconLp);
+        col.addView(badge, new LinearLayout.LayoutParams(dp(44), dp(28)));
         TextView labelView = text(label, 11, cTextSecondary, false);
         labelView.setGravity(Gravity.CENTER);
         col.addView(labelView, matchWrapMargin(3, 0));
@@ -326,9 +336,10 @@ public class MainActivity extends Activity {
         navItems.put(label, col);
         navIcons.put(label, iconView);
         navLabels.put(label, labelView);
+        navIconBadges.put(label, badge);
     }
 
-    /** Highlights the bottom-nav item matching the current section title (accent color); others stay neutral. Silently does nothing for sub-pages (e.g. "جزئیات آزمون") that have no matching tab. */
+    /** Highlights the bottom-nav item matching the current section title (accent color, plus a soft accent-tinted pill behind the icon); others stay neutral. Silently does nothing for sub-pages (e.g. "جزئیات آزمون") that have no matching tab. */
     private void updateActiveNav(String title) {
         for (String key : navIcons.keySet()) {
             boolean active = key.equals(title);
@@ -337,6 +348,8 @@ public class MainActivity extends Activity {
             TextView lbl = navLabels.get(key);
             lbl.setTextColor(color);
             lbl.setTypeface(active ? fontBold : fontRegular);
+            View badge = navIconBadges.get(key);
+            if (badge != null) badge.setBackground(roundRect(active ? adjustAlpha(accent, 0x26) : Color.TRANSPARENT, 14, Color.TRANSPARENT, 0));
         }
     }
 
@@ -460,14 +473,18 @@ public class MainActivity extends Activity {
 
             LinearLayout row = new LinearLayout(this);
             row.setOrientation(LinearLayout.HORIZONTAL);
-            row.addView(statCard("تلاش‌ها", stats == null ? "0" : String.valueOf(stats.optInt("attempts"))), weighted());
-            row.addView(statCard("بهترین", stats == null ? "0%" : fmt(stats.optDouble("best_percent")) + "%"), weightedMargin(8));
+            row.addView(statCard("تلاش‌ها", stats == null ? 0 : stats.optInt("attempts"), ""), weighted());
+            row.addView(statCard("بهترین", stats == null ? 0 : stats.optDouble("best_percent"), "%"), weightedMargin(8));
             page.addView(row, matchWrapMargin(0, 8));
             LinearLayout row2 = new LinearLayout(this);
             row2.setOrientation(LinearLayout.HORIZONTAL);
-            row2.addView(statCard("سطح", stats == null ? "1" : String.valueOf(stats.optInt("level", 1))), weighted());
-            row2.addView(statCard("XP", stats == null ? "0" : String.valueOf(stats.optInt("xp"))), weightedMargin(8));
+            row2.addView(statCard("سطح", stats == null ? 1 : stats.optInt("level", 1), ""), weighted());
+            row2.addView(statCard("XP", stats == null ? 0 : stats.optInt("xp"), ""), weightedMargin(8));
             page.addView(row2, matchWrapMargin(0, 18));
+
+            if (stats != null && stats.optInt("attempts", 0) > 0) {
+                page.addView(progressCard("نرخ قبولی", stats.optInt("success_rate", 0)), matchWrapMargin(0, 18));
+            }
 
             page.addView(sectionTitle("آزمون‌های فعال"), matchWrap());
             JSONArray active = json.optJSONArray("active_exams");
@@ -1180,13 +1197,67 @@ public class MainActivity extends Activity {
         v.setElevation(dp(elevationDp + 7));
     }
 
-    private View statCard(String label, String value) {
+    /** Animated fill bar (0 → real percent) for the home-screen success rate — waits for an actual
+     * layout pass via the view tree observer instead of View.post(), since the whole page is built
+     * before it's attached to the screen and a plain post() could fire with width still 0. */
+    private View progressCard(String label, int percent) {
         LinearLayout c = card();
-        TextView big = text(value, 23, accent, true);
-        applyTextGlow(big, accent);
+        LinearLayout headRow = new LinearLayout(this);
+        headRow.setOrientation(LinearLayout.HORIZONTAL);
+        headRow.setGravity(Gravity.CENTER_VERTICAL);
+        TextView labelView = text(label, 14, cTextPrimary, true);
+        headRow.addView(labelView, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
+        TextView pctView = text("0%", 14, accent, true);
+        headRow.addView(pctView, matchWrap());
+        c.addView(headRow, matchWrap());
+
+        FrameLayout track = new FrameLayout(this);
+        track.setBackground(roundRect(cPlaceholder, 8, Color.TRANSPARENT, 0));
+        View fill = new View(this);
+        fill.setBackground(roundRect(accent, 8, Color.TRANSPARENT, 0));
+        FrameLayout.LayoutParams fillLp = new FrameLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT);
+        track.addView(fill, fillLp);
+        LinearLayout.LayoutParams trackLp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(10));
+        trackLp.topMargin = dp(10);
+        c.addView(track, trackLp);
+
+        track.getViewTreeObserver().addOnGlobalLayoutListener(new ViewTreeObserver.OnGlobalLayoutListener() {
+            @Override public void onGlobalLayout() {
+                track.getViewTreeObserver().removeOnGlobalLayoutListener(this);
+                int fullWidth = track.getWidth();
+                if (fullWidth <= 0) return;
+                int targetWidth = Math.round(fullWidth * (percent / 100f));
+                ValueAnimator anim = ValueAnimator.ofInt(0, targetWidth);
+                anim.setDuration(800);
+                anim.setInterpolator(new DecelerateInterpolator());
+                anim.addUpdateListener(a -> {
+                    int w = (int) a.getAnimatedValue();
+                    fillLp.width = w;
+                    fill.setLayoutParams(fillLp);
+                    pctView.setText(Math.round((w / (float) fullWidth) * percent) + "%");
+                });
+                anim.start();
+            }
+        });
+        return c;
+    }
+
+    private View statCard(String label, double targetValue, String suffix) {
+        LinearLayout c = card();
+        TextView big = text("0" + suffix, 23, accent, true);
         c.addView(big, matchWrap());
         c.addView(text(label, 12, cTextSecondary, false), matchWrapMargin(0, 3));
+        animateCountUp(big, targetValue, suffix);
         return c;
+    }
+
+    /** Counts a stat number up from 0 to its real value instead of just popping in — small, cheap (one ValueAnimator, no bitmaps/layout thrash) but makes the home screen feel alive on every open. */
+    private void animateCountUp(TextView tv, double target, String suffix) {
+        ValueAnimator anim = ValueAnimator.ofFloat(0f, (float) target);
+        anim.setDuration(700);
+        anim.setInterpolator(new DecelerateInterpolator());
+        anim.addUpdateListener(a -> tv.setText(fmt((float) a.getAnimatedValue()) + suffix));
+        anim.start();
     }
 
     /** Soft neon glow behind key numbers/headlines in the dark "lab" theme (native TextView shadow layer, no extra assets). */
