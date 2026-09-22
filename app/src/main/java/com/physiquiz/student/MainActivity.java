@@ -54,6 +54,9 @@ public class MainActivity extends Activity {
     private static final String PREF_CONFIG_JSON = "wp_app_config_json";
     private static final String PREF_CONFIG_TIME = "wp_app_config_time";
     private static final String PREF_DARK_MODE = "dark_mode";
+    private static final String PREF_ATTEMPT_ID = "resume_attempt_id";
+    private static final String PREF_ATTEMPT_TOKEN = "resume_attempt_token";
+    private static final String PREF_ATTEMPT_EXAM_ID = "resume_attempt_exam_id";
 
     private SharedPreferences prefs;
     private ApiClient api;
@@ -76,7 +79,7 @@ public class MainActivity extends Activity {
     // Dark mode: `background`/`accent` above stay exactly what WordPress configured (light-theme
     // brand colors); these are the derived, theme-aware tokens every screen should read instead of
     // hardcoded grays, recomputed by computeThemeTokens() whenever darkMode or the WP colors change.
-    private boolean darkMode = true;
+    private boolean darkMode = false;
     private int cBg, cSurface, cBorder, cAccentBorder, cAccentTint, cTextPrimary, cTextSecondary, cTextStrong, cHint, cPlaceholder;
 
     private FrameLayout content;
@@ -103,7 +106,9 @@ public class MainActivity extends Activity {
         super.onCreate(savedInstanceState);
         prefs = getSharedPreferences(PREFS, MODE_PRIVATE);
         loadFonts();
-        darkMode = prefs.getBoolean(PREF_DARK_MODE, true);
+        // Dark/neon theme was tried and removed per product decision — always light now,
+        // regardless of any dark-mode preference a previous build may have saved.
+        darkMode = false;
         computeThemeTokens();
         getWindow().setStatusBarColor(cSurface);
         setLightStatusBarIcons(!darkMode);
@@ -488,33 +493,73 @@ public class MainActivity extends Activity {
         String imageUrl = cardJson.optString("image", "");
         String cardText = cardJson.optString("text", "");
         String link = cardJson.optString("link", "");
+        String layout = cardJson.optString("layout", "image_top");
         if (title.isEmpty() && imageUrl.isEmpty() && cardText.isEmpty()) return;
 
+        // Optional per-card override colors set from wp-admin; fall back to the normal theme
+        // colors (same as every other card) when the admin left them blank.
+        String bgHex = cardJson.optString("bg_color", "");
+        String fgHex = cardJson.optString("text_color", "");
+        int fg = cTextPrimary, fgSecondary = cTextStrong;
+        try { if (!fgHex.isEmpty()) { fg = Color.parseColor(fgHex); fgSecondary = adjustAlpha(fg, 0xCC); } } catch (Exception ignored) { }
+
+        // "text_only" means the admin chose a plain color banner even if an image URL happens to
+        // still be set — the layout choice wins over just checking whether a URL is present.
+        boolean showImage = !imageUrl.isEmpty() && !"text_only".equals(layout);
+
         LinearLayout card = card();
-        if (!imageUrl.isEmpty()) {
-            FrameLayout imgWrap = new FrameLayout(this);
-            GradientDrawable bg = new GradientDrawable();
-            bg.setColor(cPlaceholder);
-            bg.setCornerRadius(dp(12));
-            imgWrap.setBackground(bg);
-            imgWrap.setClipToOutline(true);
-            ImageView iv = new ImageView(this);
-            iv.setScaleType(ImageView.ScaleType.CENTER_CROP);
-            imgWrap.addView(iv, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
-            loadImageInto(imageUrl, iv);
-            card.addView(imgWrap, matchWrapHeightMargin(110, 0, 10));
+        if (!bgHex.isEmpty()) {
+            try {
+                int bg = Color.parseColor(bgHex);
+                card.setBackground(roundRect(bg, 18, darkMode ? adjustAlpha(accent, 0xB0) : cBorder, darkMode ? 2 : 1));
+            } catch (Exception ignored) { }
         }
-        if (!title.isEmpty()) card.addView(text(title, 16, cTextPrimary, true), matchWrap());
-        if (!cardText.isEmpty()) {
-            TextView t = bodyText(cardText);
-            t.setPadding(0, dp(4), 0, 0);
-            card.addView(t, matchWrap());
+
+        if ("image_side".equals(layout) && showImage) {
+            card.setOrientation(LinearLayout.HORIZONTAL);
+            card.setGravity(Gravity.CENTER_VERTICAL);
+            card.addView(contentCardImage(imageUrl, 12), new LinearLayout.LayoutParams(dp(64), dp(64)));
+            LinearLayout textCol = column();
+            if (!title.isEmpty()) textCol.addView(text(title, 15, fg, true), matchWrap());
+            if (!cardText.isEmpty()) {
+                TextView t = bodyText(cardText);
+                t.setTextColor(fgSecondary);
+                t.setPadding(0, dp(4), 0, 0);
+                textCol.addView(t, matchWrap());
+            }
+            LinearLayout.LayoutParams tlp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1);
+            tlp.rightMargin = dp(12);
+            card.addView(textCol, tlp);
+        } else {
+            if (showImage) card.addView(contentCardImage(imageUrl, 110), matchWrapHeightMargin(110, 0, 10));
+            if (!title.isEmpty()) card.addView(text(title, 16, fg, true), matchWrap());
+            if (!cardText.isEmpty()) {
+                TextView t = bodyText(cardText);
+                t.setTextColor(fgSecondary);
+                t.setPadding(0, dp(4), 0, 0);
+                card.addView(t, matchWrap());
+            }
         }
         if (!link.isEmpty()) {
             card.setOnClickListener(v -> openExternal(link));
             addRippleFeedback(card, 18);
         }
         page.addView(card, matchWrapMargin(0, 10));
+    }
+
+    /** Shared rounded/clipped image block for content cards; heightDp also doubles as the corner radius source for the "image_side" 64dp square vs the "image_top" 110dp banner. */
+    private View contentCardImage(String imageUrl, int heightDp) {
+        FrameLayout imgWrap = new FrameLayout(this);
+        GradientDrawable bg = new GradientDrawable();
+        bg.setColor(cPlaceholder);
+        bg.setCornerRadius(dp(heightDp <= 64 ? 10 : 12));
+        imgWrap.setBackground(bg);
+        imgWrap.setClipToOutline(true);
+        ImageView iv = new ImageView(this);
+        iv.setScaleType(ImageView.ScaleType.CENTER_CROP);
+        imgWrap.addView(iv, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        loadImageInto(imageUrl, iv);
+        return imgWrap;
     }
 
     private void showExams() {
@@ -552,7 +597,66 @@ public class MainActivity extends Activity {
         page.addView(card, matchWrapMargin(0, 10));
     }
 
+    /** Persisted (not just in-memory) so a killed/relaunched app can resume an in-progress attempt instead of silently abandoning it — see resumeAttempt() and showExamDetail(). */
+    private void saveAttemptPrefs(int examId) {
+        prefs.edit()
+                .putLong(PREF_ATTEMPT_ID, currentAttemptId)
+                .putString(PREF_ATTEMPT_TOKEN, currentAttemptToken)
+                .putInt(PREF_ATTEMPT_EXAM_ID, examId)
+                .apply();
+    }
+
+    private void clearAttemptPrefs() {
+        prefs.edit().remove(PREF_ATTEMPT_ID).remove(PREF_ATTEMPT_TOKEN).remove(PREF_ATTEMPT_EXAM_ID).apply();
+    }
+
     private void showExamDetail(int examId) {
+        long savedId = prefs.getLong(PREF_ATTEMPT_ID, 0);
+        String savedToken = prefs.getString(PREF_ATTEMPT_TOKEN, "");
+        int savedExamId = prefs.getInt(PREF_ATTEMPT_EXAM_ID, 0);
+        if (savedId > 0 && savedExamId == examId && !savedToken.isEmpty()) {
+            resumeAttempt(savedId, savedToken, examId);
+            return;
+        }
+        showExamIntro(examId);
+    }
+
+    /** Restores an in-progress attempt the app previously started but never got to finish reporting locally (app was killed, phone locked, etc.) — same shape as startExam()'s success path, just filled from GET /attempts/{id} instead of the start endpoint. Falls back to the normal intro screen if the saved attempt turns out to be gone/expired/already submitted. */
+    private void resumeAttempt(long attemptId, String token, int examId) {
+        prepareSection("جزئیات آزمون");
+        runApi(() -> api.getAttempt("/wp-json/physiquiz/v1/attempts/" + attemptId, token), json -> {
+            if (json.optBoolean("submitted", false)) {
+                clearAttemptPrefs();
+                JSONObject result = json.optJSONObject("result");
+                if (result != null) { showFinalResult(result); return; }
+                showExamIntro(examId);
+                return;
+            }
+            currentAttemptId = attemptId;
+            currentAttemptToken = token;
+            currentExam = json.optJSONObject("exam") == null ? new JSONObject() : json.optJSONObject("exam");
+            currentQuestions = json.optJSONArray("questions") == null ? new JSONArray() : json.optJSONArray("questions");
+            currentAnswers = json.optJSONObject("answers") == null ? new JSONObject() : json.optJSONObject("answers");
+            JSONObject state = json.optJSONObject("state");
+            currentQuestionIndex = state != null ? state.optInt("current_index", 0) : 0;
+            currentAntiCheat = currentExam.optBoolean("anti_cheat", false);
+            // Elapsed/remaining time comes from the server (based on started_at), not recomputed
+            // locally, so a resumed attempt can't get extra time just by reopening the app.
+            remainingSeconds = Math.max(0, json.optLong("remaining", currentExam.optInt("duration_minutes", 0) * 60L));
+            if (currentAntiCheat || config.blockScreenshots) getWindow().addFlags(WindowManager.LayoutParams.FLAG_SECURE);
+            else getWindow().clearFlags(WindowManager.LayoutParams.FLAG_SECURE);
+            toast("آزمون نیمه‌کاره‌ی قبلی ادامه پیدا کرد.");
+            showQuestion();
+            startTimer();
+        }, error -> {
+            // Saved attempt no longer usable for any reason (deleted, wrong account, network-independent
+            // rejection) — don't keep retrying it forever, just clear it and let the student start fresh.
+            clearAttemptPrefs();
+            showExamIntro(examId);
+        });
+    }
+
+    private void showExamIntro(int examId) {
         prepareSection("جزئیات آزمون");
         runApi(() -> api.get("/wp-json/physiquiz/v1/mobile/exams/" + examId), json -> {
             JSONObject exam = json.optJSONObject("exam");
@@ -621,6 +725,7 @@ public class MainActivity extends Activity {
             currentQuestionIndex = 0;
             currentAntiCheat = currentExam.optBoolean("anti_cheat", false);
             remainingSeconds = Math.max(0, currentExam.optInt("duration_minutes", 0) * 60L);
+            saveAttemptPrefs(examId);
             if (currentAntiCheat || config.blockScreenshots) getWindow().addFlags(WindowManager.LayoutParams.FLAG_SECURE);
             else getWindow().clearFlags(WindowManager.LayoutParams.FLAG_SECURE);
             showQuestion();
@@ -771,8 +876,17 @@ public class MainActivity extends Activity {
         if (!config.blockScreenshots) getWindow().clearFlags(WindowManager.LayoutParams.FLAG_SECURE);
         currentAttemptId = 0;
         currentAttemptToken = "";
+        clearAttemptPrefs();
         prepareSection("نتیجه آزمون");
         LinearLayout page = pageColumn();
+        if (result.optBoolean("results_pending", false)) {
+            page.addView(hero("پاسخ‌برگ ثبت شد", result.optString("message", "نتیجه توسط مدیر اعلام خواهد شد.")), matchWrapMargin(0, 14));
+            Button results = primaryButton("رفتن به کارنامه‌ها");
+            results.setOnClickListener(v -> showResults());
+            page.addView(results, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(56)));
+            setScrollable(page);
+            return;
+        }
         boolean passed = result.optBoolean("passed");
         String percent = fmt(result.optDouble("percent")) + "%";
         page.addView(hero(passed ? "قبول شدی" : "نتیجه ثبت شد", "درصد نهایی: " + percent), matchWrapMargin(0, 14));
@@ -801,6 +915,15 @@ public class MainActivity extends Activity {
     private void addResultCard(LinearLayout page, JSONObject r) {
         if (r == null) return;
         LinearLayout card = card();
+        if (r.optBoolean("results_pending", false)) {
+            card.addView(cardHeader("⏳", cTextSecondary, r.optString("exam_title", "آزمون"), pill("در انتظار اعلام", cTextSecondary)), matchWrap());
+            TextView msg = bodyText(r.optString("message", "نتیجه هنوز اعلام نشده است."));
+            msg.setPadding(0, dp(8), 0, dp(2));
+            card.addView(msg, matchWrap());
+            card.addView(text(r.optString("submitted_at", ""), 12, cTextSecondary, false), matchWrap());
+            page.addView(card, matchWrapMargin(0, 10));
+            return;
+        }
         boolean passed = r.optBoolean("passed");
         int stateColor = passed ? Color.rgb(22, 163, 74) : cTextSecondary;
         card.addView(cardHeader(passed ? "🏅" : "📋", passed ? Color.rgb(22, 163, 74) : cTextSecondary, r.optString("exam_title", "آزمون"), pill(fmt(r.optDouble("percent")) + "%", stateColor)), matchWrap());
@@ -873,19 +996,6 @@ public class MainActivity extends Activity {
                 support.setOnClickListener(v -> openExternal(config.supportUrl));
                 page.addView(support, slp);
             }
-            LinearLayout darkRow = card();
-            darkRow.setOrientation(LinearLayout.HORIZONTAL);
-            darkRow.setGravity(Gravity.CENTER_VERTICAL);
-            TextView darkLabel = text("حالت تیره", 14, cTextPrimary, true);
-            LinearLayout.LayoutParams darkLabelLp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1);
-            darkRow.addView(darkLabel, darkLabelLp);
-            Switch darkSwitch = new Switch(this);
-            darkSwitch.setChecked(darkMode);
-            darkSwitch.setOnCheckedChangeListener((btn, isChecked) -> { if (isChecked != darkMode) setDarkMode(isChecked); });
-            darkRow.addView(darkSwitch, matchWrap());
-            LinearLayout.LayoutParams darkRowLp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-            darkRowLp.topMargin = dp(12);
-            page.addView(darkRow, darkRowLp);
             Button logout = secondaryButton("خروج از حساب");
             LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(52)); lp.topMargin = dp(12);
             page.addView(logout, lp);
@@ -903,6 +1013,7 @@ public class MainActivity extends Activity {
         api.setAuthToken("");
         currentAttemptId = 0;
         currentAttemptToken = "";
+        clearAttemptPrefs();
         stopTimer();
         if (!config.blockScreenshots) getWindow().clearFlags(WindowManager.LayoutParams.FLAG_SECURE);
         showLogin();
@@ -927,8 +1038,17 @@ public class MainActivity extends Activity {
 
     private interface JsonCall { JSONObject run() throws Exception; }
     private interface JsonSuccess { void run(JSONObject json); }
+    private interface JsonError { void run(Exception e); }
 
     private void runApi(JsonCall call, JsonSuccess success) {
+        runApi(call, success, e -> showMessage(
+                e instanceof ApiClient.ApiException ? "خطا" : "خطای اتصال",
+                e instanceof ApiClient.ApiException ? e.getMessage() : "ارتباط با REST API برقرار نشد. اینترنت، SSL و فعال بودن افزونه را بررسی کنید."
+        ));
+    }
+
+    /** Same as the two-arg overload, but lets the caller handle a failed request itself (e.g. silently falling back to another flow) instead of always showing the generic error dialog. A 401 with an existing session still forces re-login either way, since that's never something a caller should paper over. */
+    private void runApi(JsonCall call, JsonSuccess success, JsonError error) {
         loading.setVisibility(View.VISIBLE);
         io.execute(() -> {
             try {
@@ -940,10 +1060,10 @@ public class MainActivity extends Activity {
                     if (e.status == 401 && !prefs.getString(PREF_AUTH, "").isEmpty()) {
                         toast("نشست ورود منقضی شده است. دوباره وارد شوید.");
                         clearSessionAndLogin();
-                    } else showMessage("خطا", e.getMessage());
+                    } else error.run(e);
                 });
             } catch (Exception e) {
-                ui.post(() -> { loading.setVisibility(View.GONE); showMessage("خطای اتصال", "ارتباط با REST API برقرار نشد. اینترنت، SSL و فعال بودن افزونه را بررسی کنید."); });
+                ui.post(() -> { loading.setVisibility(View.GONE); error.run(e); });
             }
         });
     }
@@ -1043,7 +1163,10 @@ public class MainActivity extends Activity {
     private LinearLayout card() {
         LinearLayout card = column();
         card.setPadding(dp(16), dp(15), dp(16), dp(15));
-        card.setBackground(roundRect(cSurface, 18, cBorder, 1));
+        // In dark mode, a visibly lit accent-colored edge (not just the muted cBorder) is what
+        // actually reads as "glowing" up close, since shadows alone are too diffuse to notice on a
+        // small card. Light mode keeps the plain neutral border.
+        card.setBackground(roundRect(cSurface, 18, darkMode ? adjustAlpha(accent, 0xB0) : cBorder, darkMode ? 2 : 1));
         card.setElevation(dp(2));
         applyGlow(card, 2);
         return card;
@@ -1052,9 +1175,9 @@ public class MainActivity extends Activity {
     /** In the dark "lab" theme, replaces the flat black card shadow with a soft glow tinted in the admin's own accent color (API 28+ colored shadows); a no-op in light mode where a colored glow would just look muddy. */
     private void applyGlow(View v, int elevationDp) {
         if (!darkMode) return;
-        v.setOutlineAmbientShadowColor(adjustAlpha(accent, 0x55));
-        v.setOutlineSpotShadowColor(adjustAlpha(accent, 0x99));
-        v.setElevation(dp(elevationDp + 2));
+        v.setOutlineAmbientShadowColor(adjustAlpha(accent, 0x90));
+        v.setOutlineSpotShadowColor(accent);
+        v.setElevation(dp(elevationDp + 7));
     }
 
     private View statCard(String label, String value) {
@@ -1069,7 +1192,7 @@ public class MainActivity extends Activity {
     /** Soft neon glow behind key numbers/headlines in the dark "lab" theme (native TextView shadow layer, no extra assets). */
     private void applyTextGlow(TextView t, int color) {
         if (!darkMode) return;
-        t.setShadowLayer(dp(6), 0, 0, adjustAlpha(color, 0xAA));
+        t.setShadowLayer(dp(12), 0, 0, color);
     }
 
     /** Small colored circle with a centered glyph (emoji or single letter) — used as a card header icon. Not a real icon font, just a tinted background behind whatever text is passed in. */
@@ -1333,9 +1456,12 @@ public class MainActivity extends Activity {
      */
     private void computeThemeTokens() {
         if (darkMode) {
-            cBg = Color.rgb(15, 18, 26);
-            cSurface = Color.rgb(26, 30, 41);
-            cBorder = Color.rgb(51, 58, 74);
+            // Derived from the admin's own accent color (very dark, low-luminance tint of it) instead
+            // of a flat gray-black, so the whole dark theme actually reads as "neon on tinted dark",
+            // not a generic system dark mode.
+            cBg = darken(accent, 0.10f);
+            cSurface = darken(accent, 0.17f);
+            cBorder = darken(accent, 0.32f);
             cTextPrimary = Color.rgb(237, 240, 246);
             cTextSecondary = Color.rgb(148, 163, 184);
             cTextStrong = Color.rgb(203, 213, 225);
