@@ -314,29 +314,29 @@ public class MainActivity extends Activity {
     private void addNav(int iconRes, String label, Runnable action) {
         LinearLayout col = column();
         col.setGravity(Gravity.CENTER);
-        // A small pill-shaped background behind the icon (colored only when this tab is active)
-        // reads as far more "alive" than just tinting the glyph, and matches the selected-tab
-        // treatment most modern apps use.
-        FrameLayout badge = new FrameLayout(this);
-        badge.setBackground(roundRect(Color.TRANSPARENT, 14, Color.TRANSPARENT, 0));
+        // The tinted pill is now the icon's own background (padding around the glyph) instead of a
+        // separate wrapping FrameLayout — one less view in the hierarchy, and the whole nav item
+        // uses WRAP_CONTENT height now instead of a tight fixed 52dp, since that was clipping the
+        // label under the new (taller) Vazirmatn font metrics.
         ImageView iconView = new ImageView(this);
         iconView.setImageResource(iconRes);
         iconView.setColorFilter(cTextSecondary, PorterDuff.Mode.SRC_IN);
-        int iconSize = dp(22);
-        FrameLayout.LayoutParams iconLp = new FrameLayout.LayoutParams(iconSize, iconSize, Gravity.CENTER);
-        badge.addView(iconView, iconLp);
-        col.addView(badge, new LinearLayout.LayoutParams(dp(44), dp(28)));
+        iconView.setScaleType(ImageView.ScaleType.FIT_CENTER);
+        int pad = dp(5);
+        iconView.setPadding(pad, pad, pad, pad);
+        iconView.setBackground(roundRect(Color.TRANSPARENT, 14, Color.TRANSPARENT, 0));
+        col.addView(iconView, new LinearLayout.LayoutParams(dp(42), dp(32)));
         TextView labelView = text(label, 11, cTextSecondary, false);
         labelView.setGravity(Gravity.CENTER);
-        col.addView(labelView, matchWrapMargin(3, 0));
+        col.addView(labelView, matchWrapMargin(4, 0));
         col.setOnClickListener(v -> action.run());
-        col.setPadding(dp(2), dp(4), dp(2), dp(2));
+        col.setPadding(dp(2), dp(6), dp(2), dp(6));
         addRippleFeedback(col, 14);
-        bottomBar.addView(col, new LinearLayout.LayoutParams(0, dp(52), 1));
+        bottomBar.addView(col, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
         navItems.put(label, col);
         navIcons.put(label, iconView);
         navLabels.put(label, labelView);
-        navIconBadges.put(label, badge);
+        navIconBadges.put(label, iconView);
     }
 
     /** Highlights the bottom-nav item matching the current section title (accent color, plus a soft accent-tinted pill behind the icon); others stay neutral. Silently does nothing for sub-pages (e.g. "جزئیات آزمون") that have no matching tab. */
@@ -1244,6 +1244,13 @@ public class MainActivity extends Activity {
 
     private View statCard(String label, double targetValue, String suffix) {
         LinearLayout c = card();
+        // A whisper-soft brand-tinted gradient instead of the flat card fill — subtle enough to stay
+        // readable, but noticeably less "generic list item" than a plain white box.
+        GradientDrawable grad = new GradientDrawable(GradientDrawable.Orientation.TL_BR,
+                new int[]{cSurface, tintTowardWhite(accent, 0.88f)});
+        grad.setCornerRadius(dp(18));
+        if (!darkMode) grad.setStroke(dp(1), cBorder);
+        c.setBackground(grad);
         TextView big = text("0" + suffix, 23, accent, true);
         c.addView(big, matchWrap());
         c.addView(text(label, 12, cTextSecondary, false), matchWrapMargin(0, 3));
@@ -1401,6 +1408,14 @@ public class MainActivity extends Activity {
         return Color.rgb(Math.min(255, Math.max(0, r)), Math.min(255, Math.max(0, g)), Math.min(255, Math.max(0, b)));
     }
 
+    /** Blends a color toward white — used for soft, barely-there brand-tinted gradients on light-mode cards (e.g. statCard) instead of a flat fill. factor=1 is pure white, 0 is the color unchanged. */
+    private int tintTowardWhite(int color, float factor) {
+        int r = Math.round(Color.red(color) + (255 - Color.red(color)) * factor);
+        int g = Math.round(Color.green(color) + (255 - Color.green(color)) * factor);
+        int b = Math.round(Color.blue(color) + (255 - Color.blue(color)) * factor);
+        return Color.rgb(Math.min(255, r), Math.min(255, g), Math.min(255, b));
+    }
+
     private View sectionIntro(String title, String subtitle) {
         LinearLayout c = card();
         c.addView(text(title, 21, cTextPrimary, true), matchWrap());
@@ -1477,7 +1492,9 @@ public class MainActivity extends Activity {
         b.setTextSize(15);
         b.setTextColor(Color.WHITE);
         b.setTypeface(fontBold);
-        b.setBackground(withRipple(roundRect(accent, 18, Color.TRANSPARENT, 0), 18, 0x40FFFFFF));
+        GradientDrawable grad = new GradientDrawable(GradientDrawable.Orientation.LEFT_RIGHT, new int[]{accent, darken(accent, 0.82f)});
+        grad.setCornerRadius(dp(18));
+        b.setBackground(withRipple(grad, 18, 0x40FFFFFF));
         b.setElevation(dp(3));
         applyGlow(b, 3);
         return b;
