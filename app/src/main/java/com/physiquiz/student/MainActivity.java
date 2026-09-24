@@ -6,6 +6,7 @@ import android.app.AlertDialog;
 import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.res.ColorStateList;
+import android.text.TextUtils;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.graphics.Color;
@@ -31,6 +32,7 @@ import android.widget.Button;
 import android.widget.CheckBox;
 import android.widget.EditText;
 import android.widget.FrameLayout;
+import android.widget.HorizontalScrollView;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.ProgressBar;
@@ -320,7 +322,7 @@ public class MainActivity extends Activity {
         // label under the new (taller) Vazirmatn font metrics.
         ImageView iconView = new ImageView(this);
         iconView.setImageResource(iconRes);
-        iconView.setColorFilter(cTextSecondary, PorterDuff.Mode.SRC_IN);
+        iconView.setImageTintList(ColorStateList.valueOf(cTextSecondary));
         iconView.setScaleType(ImageView.ScaleType.FIT_CENTER);
         int pad = dp(5);
         iconView.setPadding(pad, pad, pad, pad);
@@ -344,7 +346,7 @@ public class MainActivity extends Activity {
         for (String key : navIcons.keySet()) {
             boolean active = key.equals(title);
             int color = active ? accent : cTextSecondary;
-            navIcons.get(key).setColorFilter(color, PorterDuff.Mode.SRC_IN);
+            navIcons.get(key).setImageTintList(ColorStateList.valueOf(color));
             TextView lbl = navLabels.get(key);
             lbl.setTextColor(color);
             lbl.setTypeface(active ? fontBold : fontRegular);
@@ -465,7 +467,12 @@ public class MainActivity extends Activity {
 
             page.addView(hero("سلام " + name + " 👋", "امروز یک قدم دیگر به تسلط بر فیزیک نزدیک‌تر شو.", name), matchWrapMargin(0, 14));
 
-            if (config.cards != null && config.cards.length() > 0) {
+            if (config.cardRows != null && config.cardRows.length() > 0) {
+                for (int i = 0; i < config.cardRows.length(); i++) {
+                    addCarouselRow(page, config.cardRows.optJSONObject(i));
+                }
+            } else if (config.cards != null && config.cards.length() > 0) {
+                // Fallback for a WordPress side that hasn't been updated to send card_rows yet.
                 for (int i = 0; i < config.cards.length(); i++) {
                     addContentCard(page, config.cards.optJSONObject(i));
                 }
@@ -504,6 +511,78 @@ public class MainActivity extends Activity {
     }
 
     /** Renders one WordPress-managed content card: image (optional) + title + short text, tappable if it has a link. */
+    /** One horizontally-scrolling carousel row (its optional title, then a swipeable strip of compact cards) — the modern replacement for the old single-column card stack, entirely wp-admin driven. */
+    private void addCarouselRow(LinearLayout page, JSONObject rowJson) {
+        if (rowJson == null) return;
+        JSONArray cardsArr = rowJson.optJSONArray("cards");
+        if (cardsArr == null || cardsArr.length() == 0) return;
+        String title = rowJson.optString("title", "");
+        if (!title.isEmpty()) page.addView(text(title, 16, cTextPrimary, true), matchWrapMargin(0, 10));
+
+        HorizontalScrollView scroll = new HorizontalScrollView(this);
+        scroll.setHorizontalScrollBarEnabled(false);
+        scroll.setOverScrollMode(View.OVER_SCROLL_NEVER);
+        scroll.setClipToPadding(false);
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
+        row.setPadding(dp(2), 0, dp(2), dp(4));
+        boolean any = false;
+        for (int i = 0; i < cardsArr.length(); i++) {
+            View card = buildCarouselCard(cardsArr.optJSONObject(i));
+            if (card == null) continue;
+            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(dp(148), ViewGroup.LayoutParams.WRAP_CONTENT);
+            lp.leftMargin = dp(10);
+            row.addView(card, lp);
+            any = true;
+        }
+        if (!any) return;
+        scroll.addView(row, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        page.addView(scroll, matchWrapMargin(0, 14));
+    }
+
+    /** A compact, fixed-width card for inside a carousel row — same admin-controlled fields as addContentCard (image/title/text/link/layout/colors) but sized and truncated to sit nicely in a horizontal strip instead of taking the full screen width. */
+    private View buildCarouselCard(JSONObject cardJson) {
+        if (cardJson == null) return null;
+        String title = cardJson.optString("title", "");
+        String imageUrl = cardJson.optString("image", "");
+        String cardText = cardJson.optString("text", "");
+        String link = cardJson.optString("link", "");
+        String layout = cardJson.optString("layout", "image_top");
+        if (title.isEmpty() && imageUrl.isEmpty() && cardText.isEmpty()) return null;
+
+        String bgHex = cardJson.optString("bg_color", "");
+        String fgHex = cardJson.optString("text_color", "");
+        int fg = cTextPrimary, fgSecondary = cTextStrong;
+        try { if (!fgHex.isEmpty()) { fg = Color.parseColor(fgHex); fgSecondary = adjustAlpha(fg, 0xCC); } } catch (Exception ignored) { }
+        boolean showImage = !imageUrl.isEmpty() && !"text_only".equals(layout);
+
+        LinearLayout card = card();
+        card.setPadding(dp(12), dp(12), dp(12), dp(12));
+        if (!bgHex.isEmpty()) {
+            try { card.setBackground(roundRect(Color.parseColor(bgHex), 18, darkMode ? adjustAlpha(accent, 0xB0) : cBorder, darkMode ? 2 : 1)); } catch (Exception ignored) { }
+        }
+        if (showImage) card.addView(contentCardImage(imageUrl, 90), matchWrapHeightMargin(90, 0, 8));
+        if (!title.isEmpty()) {
+            TextView t = text(title, 14, fg, true);
+            t.setMaxLines(2);
+            t.setEllipsize(TextUtils.TruncateAt.END);
+            card.addView(t, matchWrap());
+        }
+        if (!cardText.isEmpty()) {
+            TextView t = text(cardText, 12, fgSecondary, false);
+            t.setMaxLines(2);
+            t.setEllipsize(TextUtils.TruncateAt.END);
+            t.setPadding(0, dp(4), 0, 0);
+            card.addView(t, matchWrap());
+        }
+        if (!link.isEmpty()) {
+            card.setOnClickListener(v -> openExternal(link));
+            addRippleFeedback(card, 18);
+        }
+        return card;
+    }
+
     private void addContentCard(LinearLayout page, JSONObject cardJson) {
         if (cardJson == null) return;
         String title = cardJson.optString("title", "");
