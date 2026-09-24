@@ -15,8 +15,10 @@ public class AppConfig {
     public String accentColor = "#2563eb";
     public String backgroundColor = "#f7f9fc";
     public String bannerUrl = "";
-    /** Each element: {"title":"","image":"","text":"","link":""} — managed entirely from wp-admin, no app update needed to add/remove cards. */
+    /** Each element: {"title":"","image":"","text":"","link":"","layout":"image_top|image_side|text_only","bg_color":"","text_color":""} — managed entirely from wp-admin, no app update needed to add/remove cards or restyle them. */
     public JSONArray cards = new JSONArray();
+    /** Each element: {"title":"","cards":[...]} — the same cards grouped into up to 3 horizontally-scrolling carousel rows, each with an optional row heading. Preferred over the flat `cards` for rendering; `cards` stays around as a flat fallback. */
+    public JSONArray cardRows = new JSONArray();
     public boolean maintenanceMode = false;
     public String maintenanceMessage = "سامانه برای مدت کوتاهی در حال بروزرسانی است. لطفاً کمی بعد دوباره تلاش کنید.";
     public String supportUrl = "";
@@ -41,6 +43,8 @@ public class AppConfig {
         c.bannerUrl = j.optString("banner_url", c.bannerUrl);
         JSONArray cards = j.optJSONArray("cards");
         c.cards = cards != null ? cards : new JSONArray();
+        JSONArray cardRows = j.optJSONArray("card_rows");
+        c.cardRows = cardRows != null ? cardRows : new JSONArray();
         c.maintenanceMode = j.optBoolean("maintenance_mode", c.maintenanceMode);
         c.maintenanceMessage = j.optString("maintenance_message", c.maintenanceMessage);
         c.supportUrl = j.optString("support_url", c.supportUrl);
